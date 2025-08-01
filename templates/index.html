@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_title }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/chat.css') }}" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <nav class="navbar navbar-dark bg-dark fixed-top">
+            <div class="container-fluid">
+                <span class="navbar-brand mb-0 h1">
+                    <i class="fas fa-building"></i> {{ app_title }}
+                </span>
+                <div class="d-flex align-items-center">
+                    <span id="status-indicator" class="badge me-3">
+                        {% if agent_ready %}
+                            <span class="badge bg-success">🤖 Agent Ready</span>
+                        {% else %}
+                            <span class="badge bg-warning">⚠️ Initializing...</span>
+                        {% endif %}
+                    </span>
+                    <button class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#settingsModal">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="container-fluid main-content">
+            <div class="row h-100">
+                <!-- Sidebar -->
+                <div class="col-md-3 col-lg-2 sidebar">
+                    <div class="sidebar-content">
+                        <h6 class="sidebar-heading">🚀 Quick Actions</h6>
+                        <div id="quick-actions" class="mb-4">
+                            <!-- Quick actions will be loaded here -->
+                        </div>
+                        
+                        <h6 class="sidebar-heading">📍 Installations</h6>
+                        <div id="installations-list" class="mb-4">
+                            <!-- Installations will be loaded here -->
+                        </div>
+                        
+                        <h6 class="sidebar-heading">💡 Examples</h6>
+                        <div class="example-queries">
+                            <small class="text-muted">
+                                • "What was the uptime last week?"<br>
+                                • "Explain downtime for elevator 1"<br>
+                                • "Show performance trends"<br>
+                                • "Compare installations"
+                            </small>
+                        </div>
+                    </div>
+                    
+                    <div class="sidebar-footer">
+                        <button class="btn btn-outline-secondary btn-sm w-100" onclick="clearConversation()">
+                            <i class="fas fa-trash"></i> Clear Chat
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Chat Area -->
+                <div class="col-md-9 col-lg-10 chat-container">
+                    <div class="chat-messages" id="chat-messages">
+                        <div class="welcome-message">
+                            <div class="text-center p-4">
+                                <i class="fas fa-building fa-3x text-primary mb-3"></i>
+                                <h4>Welcome to {{ app_title }}</h4>
+                                <p class="text-muted">
+                                    Ask me about elevator uptime, downtime analysis, or performance metrics.<br>
+                                    I can analyze data across multiple installations with timezone awareness.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Typing Indicator -->
+                    <div id="typing-indicator" class="typing-indicator" style="display: none;">
+                        <div class="message assistant-message">
+                            <div class="message-content">
+                                <div class="typing-dots">
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                </div>
+                                <small class="text-muted">Analyzing elevator data...</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Input Area -->
+                    <div class="chat-input-container">
+                        <div class="input-group">
+                            <input type="text" id="message-input" class="form-control" 
+                                   placeholder="Ask about elevator uptime, downtime, or performance..." 
+                                   maxlength="1000">
+                            <button class="btn btn-primary" id="send-button" onclick="sendMessage()">
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal fade" id="settingsModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">⚙️ Settings</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="debug-mode">
+                        <label class="form-check-label" for="debug-mode">
+                            Debug Mode (Show tool results)
+                        </label>
+                    </div>
+                    <hr>
+                    <h6>Connection Status</h6>
+                    <div id="connection-status">
+                        <!-- Status info will be loaded here -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+</body>
+</html>
