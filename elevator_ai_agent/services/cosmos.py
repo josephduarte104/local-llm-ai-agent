@@ -1,0 +1,276 @@
+"""Cosmos DB service for elevator events data."""
+
+import os
+import logging
+from typing import Iterator, List, Dict, Any, Optional
+from azure.cosmos import CosmosClient
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
+
+logger = logging.getLogger(__name__)
+
+
+class CosmosService:
+    """Service for interacting with Azure Cosmos DB."""
+    
+    def __init__(self):
+        """Initialize Cosmos DB client with configuration from environment."""
+        self.uri = os.getenv('COSMOS_ENDPOINT')
+        self.key = os.getenv('COSMOS_KEY')
+        self.database_name = os.getenv('COSMOS_DATABASE_NAME', 'bmsdb')
+        self.container_name = os.getenv('COSMOS_CONTAINER_NAME', 'elevatorevents')
+        
+        if not self.uri or not self.key:
+            raise ValueError("COSMOS_ENDPOINT and COSMOS_KEY must be set in environment")
+        
+        self.client = CosmosClient(self.uri, self.key)
+        self.database = self.client.get_database_client(self.database_name)
+        self.container = self.database.get_container_client(self.container_name)
+    
+    def get_installations(self) -> List[Dict[str, str]]:
+        """
+        Get list of installations with their timezones.
+        
+        Returns:
+            List of {installationId, timezone} dictionaries
+        """
+        try:
+            query = "SELECT c.installations FROM c WHERE c.id = 'installation-list'"
+            items = list(self.container.query_items(
+                query=query,
+                enable_cross_partition_query=True
+            ))
+            
+            if items and 'installations' in items[0]:
+                raw_installations = items[0]['installations']
+                # Transform data format to match frontend expectations
+                return [
+                    {
+                        'installationId': inst.get('id', ''),
+                        'timezone': inst.get('tz', 'UTC')
+                    }
+                    for inst in raw_installations
+                ]
+            else:
+                logger.warning("No installation-list document found")
+                return []
+                
+        except CosmosResourceNotFoundError:
+            logger.error("Installation list not found")
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching installations: {e}")
+            return []
+    
+    def query_events(
+        self,
+        installation_id: str,
+        data_type: str,
+        start_ts: int,
+        end_ts: int,
+        machine_id: Optional[str] = None,
+        max_items: int = 1000
+    ) -> Iterator[Dict[str, Any]]:
+        """
+        Query events for a specific installation and data type within time range.
+        
+        Args:
+            installation_id: The installation to query
+            data_type: The event data type (e.g., "CarModeChanged")
+            start_ts: Start timestamp (epoch milliseconds)
+            end_ts: End timestamp (epoch milliseconds)
+            machine_id: Optional machine ID filter
+            max_items: Maximum items per page
+            
+        Yields:
+            Event documents
+        """
+        try:
+            # Base query
+            query = """
+                SELECT c.kafkaMessage.Timestamp, c.kafkaMessage.EventCase, c.kafkaMessage.{data_type}
+                FROM c
+                WHERE c.installationId = @installationId
+                  AND c.dataType = @dataType
+                  AND c.kafkaMessage.Timestamp BETWEEN @startTs AND @endTs
+            """.format(data_type=data_type)
+            
+            parameters: List[Dict[str, Any]] = [
+                {"name": "@installationId", "value": installation_id},
+                {"name": "@dataType", "value": data_type},
+                {"name": "@startTs", "value": start_ts},
+                {"name": "@endTs", "value": end_ts}
+            ]
+            
+            # Add machine ID filter if specified
+            if machine_id:
+                query += f" AND c.kafkaMessage.{data_type}.MachineId = @machineId"
+                parameters.append({"name": "@machineId", "value": machine_id})
+            
+            query += " ORDER BY c.kafkaMessage.Timestamp ASC"
+            
+            # Execute paginated query
+            query_iterator = self.container.query_items(
+                query=query,
+                parameters=parameters,
+                enable_cross_partition_query=True,
+                max_item_count=max_items
+            )
+            
+            for page in query_iterator.by_page():
+                for item in page:
+                    yield item
+                    
+        except Exception as e:
+            logger.error(f"Error querying events: {e}")
+            raise
+    
+    def get_car_mode_changes(
+        self,
+        installation_id: str,
+        start_ts: int,
+        end_ts: int,
+        machine_id: Optional[str] = None
+    ) -> Iterator[Dict[str, Any]]:
+        """
+        Get CarModeChanged events for uptime/downtime analysis.
+        
+        Args:
+            installation_id: The installation to query
+            start_ts: Start timestamp (epoch milliseconds)
+            end_ts: End timestamp (epoch milliseconds)
+            machine_id: Optional machine ID filter
+            
+        Yields:
+            CarModeChanged event documents
+        """
+        try:
+            # First, let's examine the actual data structure
+            explore_query = """
+                SELECT TOP 2 c.installationId, c.dataType, c.kafkaMessage
+                FROM c 
+                WHERE c.installationId = @installationId
+                  AND c.dataType = "CarModeChanged"
+            """
+            
+            explore_params: List[Dict[str, Any]] = [{"name": "@installationId", "value": installation_id}]
+            
+            logger.info(f"Exploring data structure for installation: {installation_id}")
+            
+            try:
+                explore_items = list(self.container.query_items(
+                    query=explore_query,
+                    parameters=explore_params,
+                    enable_cross_partition_query=True,
+                    max_item_count=2
+                ))
+                logger.info(f"Data exploration returned {len(explore_items)} items")
+                if explore_items:
+                    first_item = explore_items[0]
+                    kafka_msg = first_item.get('kafkaMessage', {})
+                    logger.info(f"Sample kafka message keys: {list(kafka_msg.keys())}")
+                    logger.info(f"Full sample item: {first_item}")
+            except Exception as explore_e:
+                logger.error(f"Data exploration failed: {explore_e}")
+                raise
+            
+            # Now try the original complex query with better error handling
+            query = """
+                SELECT 
+                    c.kafkaMessage.Timestamp,
+                    c.kafkaMessage.CarModeChanged.MachineId,
+                    c.kafkaMessage.CarModeChanged.ModeName,
+                    c.kafkaMessage.CarModeChanged.CarMode,
+                    c.kafkaMessage.CarModeChanged.AlarmSeverity
+                FROM c
+                WHERE c.installationId = @installationId
+                  AND c.dataType = "CarModeChanged"
+                  AND c.kafkaMessage.Timestamp >= @startTs 
+                  AND c.kafkaMessage.Timestamp <= @endTs
+                  AND IS_DEFINED(c.kafkaMessage.Timestamp)
+            """
+            
+            parameters: List[Dict[str, Any]] = [
+                {"name": "@installationId", "value": installation_id},
+                {"name": "@startTs", "value": start_ts},
+                {"name": "@endTs", "value": end_ts}
+            ]
+            
+            # Debug logging
+            logger.info(f"Cosmos query - Installation: {installation_id}, Start: {start_ts}, End: {end_ts}")
+            logger.info(f"Query: {query.strip()}")
+            logger.info(f"Parameters: {parameters}")
+            
+            if machine_id:
+                query += " AND c.kafkaMessage.CarModeChanged.MachineId = @machineId"
+                parameters.append({"name": "@machineId", "value": machine_id})
+            
+            # Don't use ORDER BY to avoid composite index requirement
+            # We'll sort the results in Python instead
+            
+            query_iterator = self.container.query_items(
+                query=query,
+                parameters=parameters,
+                enable_cross_partition_query=True
+            )
+            
+            for item in query_iterator:
+                yield item
+                
+        except Exception as e:
+            logger.error(f"Error querying car mode changes: {e}")
+            raise
+
+    def get_all_machine_ids(self, installation_id: str) -> List[str]:
+        """
+        Get all machine IDs that exist for an installation across all time periods.
+        
+        Args:
+            installation_id: The installation to query
+            
+        Returns:
+            List of machine IDs as strings
+        """
+        try:
+            query = """
+                SELECT DISTINCT c.kafkaMessage.CarModeChanged.MachineId
+                FROM c
+                WHERE c.installationId = @installationId
+                  AND c.dataType = "CarModeChanged"
+            """
+            
+            parameters = [
+                {"name": "@installationId", "value": installation_id}
+            ]
+            
+            logger.info(f"Getting all machine IDs for installation: {installation_id}")
+            
+            query_iterator = self.container.query_items(
+                query=query,
+                parameters=parameters,
+                enable_cross_partition_query=True
+            )
+            
+            machine_ids = []
+            for item in query_iterator:
+                machine_id = str(item.get('MachineId'))
+                if machine_id and machine_id not in machine_ids:
+                    machine_ids.append(machine_id)
+            
+            logger.info(f"Found machine IDs: {machine_ids}")
+            return sorted(machine_ids)
+                
+        except Exception as e:
+            logger.error(f"Error getting machine IDs for installation {installation_id}: {e}")
+            return []
+
+
+# Global instance - will be initialized when needed
+cosmos_service = None
+
+
+def get_cosmos_service():
+    """Get or create the global cosmos service instance."""
+    global cosmos_service
+    if cosmos_service is None:
+        cosmos_service = CosmosService()
+    return cosmos_service
