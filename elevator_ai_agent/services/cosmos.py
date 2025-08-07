@@ -85,43 +85,45 @@ class CosmosService:
             Event documents
         """
         try:
-            # Base query
-            query = """
-                SELECT c.kafkaMessage.Timestamp, c.kafkaMessage.EventCase, c.kafkaMessage.{data_type}
-                FROM c
-                WHERE c.installationId = @installationId
-                  AND c.dataType = @dataType
-                  AND c.kafkaMessage.Timestamp BETWEEN @startTs AND @endTs
-            """.format(data_type=data_type)
+            # Base query using a more robust way to handle the data_type field
+            query_text = (
+                "SELECT c.kafkaMessage.Timestamp, c.kafkaMessage.EventCase, c.kafkaMessage[@dataType] AS EventDetails "
+                "FROM c "
+                "WHERE c.installationId = @installationId "
+                "AND c.dataType = @dataType "
+                "AND c.kafkaMessage.Timestamp BETWEEN @startTs AND @endTs "
+                "AND IS_DEFINED(c.kafkaMessage[@dataType])"
+            )
             
-            parameters: List[Dict[str, Any]] = [
+            parameters = [
                 {"name": "@installationId", "value": installation_id},
                 {"name": "@dataType", "value": data_type},
                 {"name": "@startTs", "value": start_ts},
-                {"name": "@endTs", "value": end_ts}
+                {"name": "@endTs", "value": end_ts},
             ]
-            
-            # Add machine ID filter if specified
+
             if machine_id:
-                query += f" AND c.kafkaMessage.{data_type}.MachineId = @machineId"
+                query_text += " AND c.kafkaMessage[@dataType].MachineId = @machineId"
                 parameters.append({"name": "@machineId", "value": machine_id})
-            
-            query += " ORDER BY c.kafkaMessage.Timestamp ASC"
-            
-            # Execute paginated query
+
+            logger.info(f"Executing query: {query_text} with params: {parameters}")
+
             query_iterator = self.container.query_items(
-                query=query,
+                query=query_text,
                 parameters=parameters,
                 enable_cross_partition_query=True,
-                max_item_count=max_items
+                max_item_count=max_items,
             )
             
-            for page in query_iterator.by_page():
-                for item in page:
-                    yield item
+            for item in query_iterator:
+                # The result is now nested under 'EventDetails', so we need to un-nest it
+                # to match the structure expected by the tools.
+                event_details = item.pop('EventDetails', {})
+                item[data_type] = event_details
+                yield item
                     
         except Exception as e:
-            logger.error(f"Error querying events: {e}")
+            logger.error(f"Error querying events: {e}", exc_info=True)
             raise
     
     def get_car_mode_changes(
@@ -220,29 +222,35 @@ class CosmosService:
             logger.error(f"Error querying car mode changes: {e}")
             raise
 
-    def get_all_machine_ids(self, installation_id: str) -> List[str]:
+    def get_all_machine_ids(self, installation_id: str, data_type: str = "CarModeChanged") -> List[str]:
         """
-        Get all machine IDs that exist for an installation across all time periods.
+        Get all machine IDs that exist for an installation for a specific data type.
         
         Args:
             installation_id: The installation to query
+            data_type: The event data type (e.g., "CarModeChanged", "Door")
             
         Returns:
             List of machine IDs as strings
         """
         try:
-            query = """
-                SELECT DISTINCT c.kafkaMessage.CarModeChanged.MachineId
+            # Construct the field name dynamically
+            machine_id_field = f"c.kafkaMessage.{data_type}.MachineId"
+
+            query = f"""
+                SELECT DISTINCT VALUE {machine_id_field}
                 FROM c
                 WHERE c.installationId = @installationId
-                  AND c.dataType = "CarModeChanged"
+                  AND c.dataType = @dataType
+                  AND IS_DEFINED({machine_id_field})
             """
             
             parameters = [
-                {"name": "@installationId", "value": installation_id}
+                {"name": "@installationId", "value": installation_id},
+                {"name": "@dataType", "value": data_type}
             ]
             
-            logger.info(f"Getting all machine IDs for installation: {installation_id}")
+            logger.info(f"Getting all machine IDs for installation: {installation_id} and data type: {data_type}")
             
             query_iterator = self.container.query_items(
                 query=query,
@@ -250,19 +258,83 @@ class CosmosService:
                 enable_cross_partition_query=True
             )
             
-            machine_ids = []
-            for item in query_iterator:
-                machine_id = str(item.get('MachineId'))
-                if machine_id and machine_id not in machine_ids:
-                    machine_ids.append(machine_id)
+            machine_ids = [str(item) for item in query_iterator if item is not None]
             
-            logger.info(f"Found machine IDs: {machine_ids}")
-            return sorted(machine_ids)
+            # Remove duplicates and sort
+            unique_machine_ids = sorted(list(set(machine_ids)))
+            
+            logger.info(f"Found machine IDs: {unique_machine_ids}")
+            return unique_machine_ids
                 
         except Exception as e:
             logger.error(f"Error getting machine IDs for installation {installation_id}: {e}")
             return []
 
+
+    def get_door_events(
+        self,
+        installation_id: str,
+        start_ts: int,
+        end_ts: int
+    ) -> Iterator[Dict[str, Any]]:
+        """
+        Get Door events for door cycle analysis.
+        
+        Args:
+            installation_id: The installation to query
+            start_ts: Start timestamp (epoch milliseconds)
+            end_ts: End timestamp (epoch milliseconds)
+            
+        Yields:
+            Door event documents with flattened structure
+        """
+        try:
+            # Use simple query and filter timestamps in Python to avoid Cosmos DB issues
+            query = """
+                SELECT c.kafkaMessage.Timestamp, c.kafkaMessage.Door
+                FROM c
+                WHERE c.installationId = @installationId
+                  AND c.dataType = "Door"
+                  AND IS_DEFINED(c.kafkaMessage.Door)
+            """
+            
+            parameters = [
+                {"name": "@installationId", "value": installation_id}
+            ]
+            
+            logger.info(f"Executing door events query for installation: {installation_id}, filtering {start_ts} to {end_ts} in Python")
+            
+            query_iterator = self.container.query_items(
+                query=query,
+                parameters=parameters,
+                enable_cross_partition_query=True
+            )
+            
+            for item in query_iterator:
+                timestamp = item.get("Timestamp")
+                
+                # Filter by timestamp in Python
+                if timestamp is None or timestamp < start_ts or timestamp > end_ts:
+                    continue
+                
+                # Extract the nested fields in Python to avoid Cosmos DB query issues
+                door_data = item.get("Door", {})
+                door_details = door_data.get("Door", {})
+                
+                # Create a flattened structure
+                flattened_event = {
+                    "Timestamp": timestamp,
+                    "MachineId": door_data.get("MachineId"),
+                    "State": door_data.get("State"),
+                    "Deck": door_details.get("Deck"),
+                    "Side": door_details.get("Side")
+                }
+                
+                yield flattened_event
+                
+        except Exception as e:
+            logger.error(f"Error querying door events: {e}", exc_info=True)
+            raise
 
 # Global instance - will be initialized when needed
 cosmos_service = None

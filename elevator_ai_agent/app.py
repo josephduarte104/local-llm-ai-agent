@@ -20,8 +20,6 @@ from .services.uptime import uptime_service
 from .services.timezone import timezone_service
 from .agents.orchestrator import query_orchestrator
 
-# Load environment variables
-load_dotenv()
 
 # Ensure logs directory exists
 os.makedirs('logs', exist_ok=True)
@@ -232,7 +230,7 @@ def internal_error(error: Any) -> tuple[Any, int]:
 
 def validate_environment():
     """Validate that required environment variables are set."""
-    required_vars = ['COSMOS_ENDPOINT', 'COSMOS_KEY', 'LLM_API_URL', 'LLM_MODEL']
+    required_vars = ['COSMOSDB_ENDPOINT', 'COSMOSDB_KEY']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     
     if missing_vars:
@@ -254,7 +252,5 @@ if __name__ == '__main__':
     
     logger.info(f"Starting Elevator Ops Analyst on port {port}")
     logger.info(f"Debug mode: {debug_mode}")
-    logger.info(f"LLM endpoint: {os.getenv('LLM_API_URL')}")
-    logger.info(f"Cosmos DB: {os.getenv('COSMOS_DATABASE_NAME')}")
     
     app.run(debug=debug_mode, host='0.0.0.0', port=port)

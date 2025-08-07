@@ -8,6 +8,7 @@ from ..services.cosmos import get_cosmos_service
 from ..services.llm import llm_service
 from ..services.timezone import timezone_service
 from ..tools.car_mode_changed import car_mode_changed_tool
+from ..tools.door_cycles import door_cycles_tool
 from ..tools.basic_tools import door_tool, passenger_report_tool, hall_call_accepted_tool
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class QueryOrchestrator:
         """Initialize orchestrator with available tools."""
         self.tools = {
             'uptime_analysis': car_mode_changed_tool,
+            'door_cycle_analysis': door_cycles_tool,
             # The following tools are stubs and would need to be implemented
             # 'door_analysis': door_tool,
             # 'passenger_analysis': passenger_report_tool,
@@ -79,38 +81,26 @@ class QueryOrchestrator:
 
         try:
             # 1. Get installation info
-            try:
-                cosmos_service = get_cosmos_service()
-                installations = cosmos_service.get_installations()
-            except Exception as e:
-                logger.warning(f"Could not fetch installations: {e}. Using fallback.")
-                installations = []
-
-            demo_installations = [
-                {"installationId": "demo-installation-1", "timezone": "America/New_York"},
-                {"installationId": "demo-installation-2", "timezone": "America/Chicago"},
-                {"installationId": "demo-installation-3", "timezone": "America/Los_Angeles"}
-            ]
-            installations.extend(demo_installations)
+            cosmos_service = get_cosmos_service()
+            installations = cosmos_service.get_installations()
             
+            # Add the provided installation_id to the list for validation
+            if not any(inst['installationId'] == installation_id for inst in installations):
+                # In a real application, you might want to fetch the timezone
+                # for the given installation_id here if it's not in the list.
+                # For this case, we'll add it with a default timezone if not found.
+                installations.append({
+                    "installationId": installation_id,
+                    "timezone": "UTC" # Default timezone
+                })
+
             installation_info = next((inst for inst in installations if inst['installationId'] == installation_id), None)
 
             if not installation_info:
+                # This should ideally not be reached if the above logic is sound
                 return {'answer': f"Installation {installation_id} not found.", 'error': True}
 
-            installation_tz = installation_info['timezone']
-
-            # Handle demo mode
-            if installation_id.startswith('demo-'):
-                # (Keeping demo mode logic for now)
-                demo_response = (
-                    f"🔧 **Demo Mode Response for {installation_id}**\n\n"
-                    f"You asked: \"{message}\"\n\n"
-                    "This is a demonstration of the Elevator Operations Analyst. "
-                    "In a real environment, I would now be querying the database "
-                    "and using an AI model to generate a detailed analysis."
-                )
-                return {'answer': demo_response, 'metadata': {'demo_mode': True}}
+            installation_tz = installation_info.get('timezone', 'UTC') # Default to UTC if timezone is missing
 
             # 2. Determine time range
             if start_iso and end_iso:
@@ -133,7 +123,10 @@ class QueryOrchestrator:
             # 3. Run tools to get structured data
             # For this refactoring, we'll assume the primary tool is always uptime_analysis.
             # A more advanced implementation would use the LLM to select the tool.
-            tool_name = 'uptime_analysis'
+            tool_name = 'uptime_analysis' 
+            if 'door' in message.lower() or 'cycle' in message.lower():
+                tool_name = 'door_cycle_analysis'
+            
             tool = self.tools[tool_name]
             
             tool_results = tool.run(
