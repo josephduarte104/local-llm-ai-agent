@@ -13,13 +13,39 @@ class LLMService:
     
     def __init__(self):
         """Initialize LLM service with configuration from environment."""
-        self.base_url = os.getenv('LLM_API_URL', 'http://localhost:1234/v1')
-        self.model = os.getenv('LLM_MODEL', 'deepseek/deepseek-r1-0528-qwen3-8b')
+        # Check which LLM provider is configured
+        provider = os.getenv('LLM_PROVIDER', 'lmstudio').lower()
+        
+        if provider == 'lmstudio':
+            # Use LM Studio configuration from .env
+            base_url = os.getenv('LMSTUDIO_BASE_URL', 'http://127.0.0.1:1234/v1/chat/completions')
+            # If the URL already includes /chat/completions, use it as-is
+            # Otherwise, ensure it ends with /v1 so we can append /chat/completions later
+            if base_url.endswith('/chat/completions'):
+                self.chat_url = base_url
+                self.base_url = base_url.replace('/chat/completions', '/v1')
+            else:
+                if not base_url.endswith('/v1'):
+                    base_url = base_url.rstrip('/') + '/v1'
+                self.base_url = base_url
+                self.chat_url = base_url + '/chat/completions'
+            self.model = os.getenv('LMSTUDIO_MODEL', 'liquid/lfm2-1.2b')
+        elif provider == 'ollama':
+            # Use Ollama configuration from .env
+            self.base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+            self.chat_url = self.base_url + '/api/chat'
+            self.model = os.getenv('OLLAMA_MODEL', 'llama3.1:8b')
+        else:
+            # Fallback to legacy environment variables
+            self.base_url = os.getenv('LLM_API_URL', 'http://localhost:1234/v1')
+            self.chat_url = self.base_url + '/chat/completions'
+            self.model = os.getenv('LLM_MODEL', 'deepseek/deepseek-r1-0528-qwen3-8b')
+        
         self.timeout = 30
-        logger.info(f"LLM Service initialized - base_url: {self.base_url}, model: {self.model}")
-        logger.info(f"LLM_API_URL env var: {os.getenv('LLM_API_URL')}")
-        logger.info(f"Full endpoint will be: {self.base_url}/chat/completions")
-        # Force reload to pick up .env changes
+        logger.info(f"LLM Service initialized - provider: {provider}")
+        logger.info(f"Base URL: {self.base_url}")
+        logger.info(f"Chat URL: {self.chat_url}")
+        logger.info(f"Model: {self.model}")
     
     def chat_completion(
         self,
@@ -48,10 +74,10 @@ class LLMService:
             }
             
             logger.info(f"Calling LLM with {len(messages)} messages")
-            logger.info(f"LLM endpoint: {self.base_url}/chat/completions")
+            logger.info(f"LLM endpoint: {self.chat_url}")
             
             response = requests.post(
-                f"{self.base_url}/chat/completions",
+                self.chat_url,
                 json=payload,
                 timeout=self.timeout,
                 headers={"Content-Type": "application/json"}

@@ -15,10 +15,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import services and agents
-from services.cosmos import get_cosmos_service
-from services.uptime import uptime_service
-from services.timezone import timezone_service
-from agents.orchestrator import query_orchestrator
+from .services.cosmos import get_cosmos_service
+from .services.uptime import uptime_service
+from .services.timezone import timezone_service
+from .agents.orchestrator import query_orchestrator
 
 # Load environment variables
 load_dotenv()

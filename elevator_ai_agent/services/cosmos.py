@@ -14,13 +14,13 @@ class CosmosService:
     
     def __init__(self):
         """Initialize Cosmos DB client with configuration from environment."""
-        self.uri = os.getenv('COSMOS_ENDPOINT')
-        self.key = os.getenv('COSMOS_KEY')
-        self.database_name = os.getenv('COSMOS_DATABASE_NAME', 'bmsdb')
-        self.container_name = os.getenv('COSMOS_CONTAINER_NAME', 'elevatorevents')
+        self.uri = os.getenv('COSMOSDB_ENDPOINT')
+        self.key = os.getenv('COSMOSDB_KEY')
+        self.database_name = os.getenv('COSMOSDB_DATABASE', 'bmsdb')
+        self.container_name = os.getenv('COSMOSDB_CONTAINER', 'elevatorevents')
         
         if not self.uri or not self.key:
-            raise ValueError("COSMOS_ENDPOINT and COSMOS_KEY must be set in environment")
+            raise ValueError("COSMOSDB_ENDPOINT and COSMOSDB_KEY must be set in environment")
         
         self.client = CosmosClient(self.uri, self.key)
         self.database = self.client.get_database_client(self.database_name)

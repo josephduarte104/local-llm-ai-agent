@@ -2,8 +2,8 @@
 
 from datetime import datetime
 from typing import Dict, Any, Optional, List
-from tools.base import BaseTool
-from services.uptime import uptime_service
+from .base import BaseTool
+from ..services.uptime import uptime_service
 
 
 class CarModeChangedTool(BaseTool):

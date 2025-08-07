@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from services.timezone import TimezoneService
+from ..services.timezone import TimezoneService
 
 
 class TestTimezoneService:

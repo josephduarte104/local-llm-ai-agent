@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from services.uptime import UptimeService
+from ..services.uptime import UptimeService
 
 
 class TestUptimeService:
@@ -57,7 +57,7 @@ class TestUptimeService:
     
     def test_calculate_metrics(self):
         """Test uptime metrics calculation."""
-        from services.uptime import ModeInterval
+        from ..services.uptime import ModeInterval
         
         tz = ZoneInfo("America/New_York")
         base_time = datetime(2023, 12, 1, 7, 0, 0, tzinfo=tz)
