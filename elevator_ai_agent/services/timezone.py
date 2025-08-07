@@ -126,7 +126,12 @@ class TimezoneService:
         return week_start, week_end
 
     @staticmethod
-    def validate_date_range(start_time: datetime, end_time: datetime, tz_name: str) -> dict:
+    def validate_date_range(
+        start_time: datetime, 
+        end_time: datetime, 
+        tz_name: str, 
+        today_override: Optional[datetime] = None
+    ) -> dict:
         """
         Validate date range and provide guidance for future dates.
         

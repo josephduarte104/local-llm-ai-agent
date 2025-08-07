@@ -72,7 +72,8 @@ class QueryOrchestrator:
         message: str,
         installation_id: str,
         start_iso: Optional[str] = None,
-        end_iso: Optional[str] = None
+        end_iso: Optional[str] = None,
+        today_override: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Process a user query by calling tools and generating an LLM response.
@@ -124,6 +125,12 @@ class QueryOrchestrator:
             else:
                 start_time, end_time = self.parse_time_range(message, installation_tz)
 
+            today_override_dt = None
+            if today_override:
+                today_override_dt = timezone_service.parse_iso_with_timezone(
+                    today_override, installation_tz
+                )
+
             # 3. Run tools to get structured data
             # For this refactoring, we'll assume the primary tool is always uptime_analysis.
             # A more advanced implementation would use the LLM to select the tool.
@@ -134,19 +141,24 @@ class QueryOrchestrator:
                 installation_id=installation_id,
                 tz=installation_tz,
                 start=start_time,
-                end=end_time
+                end=end_time,
+                today_override=today_override_dt
             )
 
+            # Preserve the original tool_results to be returned later
+            original_tool_results = tool_results.copy()
+            
             # 4. Generate response using the LLM
             system_prompt = self._get_system_prompt(installation_tz)
             
-            # Remove intervals and daily availability from the main tool results to avoid cluttering the prompt
-            if 'machine_metrics' in tool_results and isinstance(tool_results['machine_metrics'], list):
-                for metric in tool_results['machine_metrics']:
+            # Create a cleaned version of the tool results for the LLM prompt
+            prompt_tool_results = json.loads(json.dumps(tool_results, default=str)) # Deep copy
+            if 'machine_metrics' in prompt_tool_results and isinstance(prompt_tool_results['machine_metrics'], list):
+                for metric in prompt_tool_results['machine_metrics']:
                     metric.pop('intervals', None)
                     metric.pop('daily_availability', None)
 
-            tool_context = json.dumps(tool_results, indent=2, default=str)
+            tool_context = json.dumps(prompt_tool_results, indent=2, default=str)
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -160,7 +172,7 @@ class QueryOrchestrator:
 
             return {
                 'answer': llm_response,
-                'tool_results': tool_results,
+                'tool_results': original_tool_results, # Return the original, detailed results
                 'installation_id': installation_id,
                 'installation_tz': installation_tz,
                 'time_range': {

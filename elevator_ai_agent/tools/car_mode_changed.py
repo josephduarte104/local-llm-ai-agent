@@ -22,6 +22,7 @@ class CarModeChangedTool(BaseTool):
         start: datetime, 
         end: datetime, 
         machine_id: Optional[str] = None,
+        today_override: Optional[datetime] = None,
         **kwargs: Any
     ) -> Dict[str, Any]:
         """
@@ -45,7 +46,8 @@ class CarModeChangedTool(BaseTool):
             start_time=start,
             end_time=end,
             installation_tz=tz,
-            machine_id=machine_id
+            machine_id=machine_id,
+            today_override=today_override
         )
         
         return metrics

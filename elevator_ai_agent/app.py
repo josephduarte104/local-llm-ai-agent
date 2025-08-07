@@ -128,12 +128,15 @@ def chat():
         if not any(inst['installationId'] == installation_id for inst in installations):
             return jsonify({'error': f'Installation {installation_id} not found'}), 400
         
+        today_override = data.get('today_override')
+
         # Process query through orchestrator
         result = query_orchestrator.process_query(
             message=message,
             installation_id=installation_id,
             start_iso=start_iso,
-            end_iso=end_iso
+            end_iso=end_iso,
+            today_override=today_override
         )
         
         # Log the query (without sensitive data)

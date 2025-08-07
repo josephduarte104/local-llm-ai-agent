@@ -303,7 +303,8 @@ class UptimeService:
         start_time: datetime,
         end_time: datetime,
         installation_tz: str,
-        machine_id: Optional[str] = None
+        machine_id: Optional[str] = None,
+        today_override: Optional[datetime] = None
     ) -> Dict[str, Any]:
         """
         Get uptime metrics for installation or specific machine.
@@ -319,7 +320,9 @@ class UptimeService:
         """
         try:
             # Validate date range and handle future dates
-            date_validation = timezone_service.validate_date_range(start_time, end_time, installation_tz)
+            date_validation = timezone_service.validate_date_range(
+                start_time, end_time, installation_tz, today_override=today_override
+            )
             
             # Adjust end time if it's in the future
             if 'adjusted_end_time' in date_validation:
@@ -332,7 +335,7 @@ class UptimeService:
                     'error': 'Invalid date range',
                     'date_validation': date_validation
                 }
-            
+
             # Convert to epoch milliseconds for Cosmos query
             start_epoch = timezone_service.local_datetime_to_epoch(start_time)
             end_epoch = timezone_service.local_datetime_to_epoch(end_time)
@@ -434,10 +437,11 @@ class UptimeService:
             # Sort machine metrics by machine_id for consistent ordering
             machine_metrics_list.sort(key=lambda x: int(x['machine_id']))
 
-            # Calculate installation summary (only from machines with data)
-            if total_duration > 0:
-                installation_uptime_pct = (total_uptime / total_duration) * 100
-                installation_downtime_pct = (total_downtime / total_duration) * 100
+            # Calculate installation summary (based on the sum of individual machine data)
+            total_minutes_all_machines = total_uptime + total_downtime
+            if total_minutes_all_machines > 0:
+                installation_uptime_pct = (total_uptime / total_minutes_all_machines) * 100
+                installation_downtime_pct = (total_downtime / total_minutes_all_machines) * 100
             else:
                 installation_uptime_pct = 0.0
                 installation_downtime_pct = 0.0
