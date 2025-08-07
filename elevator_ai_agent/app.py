@@ -23,6 +23,9 @@ from agents.orchestrator import query_orchestrator
 # Load environment variables
 load_dotenv()
 
+# Ensure logs directory exists
+os.makedirs('logs', exist_ok=True)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -41,9 +44,6 @@ app = Flask(__name__,
            static_folder='ui/static')
 
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-key-change-in-production')
-
-# Ensure logs directory exists
-os.makedirs('logs', exist_ok=True)
 
 
 @app.route('/')
@@ -236,6 +236,7 @@ def validate_environment():
 
 
 if __name__ == '__main__':
+    # Validate environment only when running as a script
     if not validate_environment():
         logger.error("Environment validation failed. Check your .env file.")
         exit(1)
