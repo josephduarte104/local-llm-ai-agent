@@ -75,9 +75,8 @@ class QueryOrchestrator:
         end_iso: Optional[str] = None,
         today_override: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Process a user query by calling tools and generating an LLM response.
-        """
+        logger.debug(f"Orchestrator received query: message='{message}', installation_id='{installation_id}', start_iso='{start_iso}', end_iso='{end_iso}', today_override='{today_override}'")
+
         try:
             # 1. Get installation info
             try:
@@ -145,6 +144,31 @@ class QueryOrchestrator:
                 today_override=today_override_dt
             )
 
+            logger.debug(f"Tool '{tool_name}' returned data: {json.dumps(tool_results, default=str, indent=2)}")
+
+            # Pre-LLM check: If no elevators had data, return a direct response
+            if tool_results.get('installation_summary', {}).get('elevators_with_data') == 0:
+                logger.info(f"No data found for installation {installation_id}. Bypassing LLM.")
+                answer = (
+                    f"I could not find any operational data for installation "
+                    f"`{installation_id}` in the specified date range "
+                    f"({start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')}).\n\n"
+                    "This could mean:\n"
+                    "- The elevators were not reporting data during this period.\n"
+                    "- The installation ID or date range might be incorrect.\n\n"
+                    "Please verify the details and try again."
+                )
+                return {
+                    'answer': answer,
+                    'tool_results': tool_results,
+                    'installation_id': installation_id,
+                    'installation_tz': installation_tz,
+                    'time_range': {
+                        'start': start_time.isoformat(),
+                        'end': end_time.isoformat()
+                    }
+                }
+
             # Preserve the original tool_results to be returned later
             original_tool_results = tool_results.copy()
             
@@ -159,6 +183,7 @@ class QueryOrchestrator:
                     metric.pop('daily_availability', None)
 
             tool_context = json.dumps(prompt_tool_results, indent=2, default=str)
+            logger.debug(f"Context passed to LLM:\n{tool_context}")
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -169,6 +194,8 @@ class QueryOrchestrator:
             
             if not llm_response:
                 return {'answer': "Sorry, I couldn't generate a response. Please check that the LM Studio server is running.", 'error': True}
+
+            logger.debug(f"LLM generated response:\n{llm_response}")
 
             return {
                 'answer': llm_response,

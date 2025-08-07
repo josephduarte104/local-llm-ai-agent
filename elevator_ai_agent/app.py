@@ -27,8 +27,10 @@ load_dotenv()
 os.makedirs('logs', exist_ok=True)
 
 # Configure logging
+# Get log level from environment or default to INFO
+log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('logs/app.log'),
@@ -97,6 +99,8 @@ def chat():
         
         if not data:
             return jsonify({'error': 'No JSON data provided'}), 400
+        
+        logger.debug(f"Received raw chat request: {data}")
         
         message = data.get('message', '').strip()
         installation_id = data.get('installationId', '').strip()
