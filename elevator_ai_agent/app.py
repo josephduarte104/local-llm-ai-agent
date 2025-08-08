@@ -132,6 +132,48 @@ def chat():
         
         today_override = data.get('today_override')
 
+        # Validate date range if dates are provided
+        if start_iso and end_iso:
+            from .services.timezone import timezone_service
+            from datetime import datetime
+            
+            try:
+                # Parse dates to validate them
+                start_time = datetime.fromisoformat(start_iso)
+                end_time = datetime.fromisoformat(end_iso)
+                
+                # Get installation timezone for validation
+                installation_info = next(
+                    (inst for inst in installations if inst['installationId'] == installation_id),
+                    None
+                )
+                
+                if installation_info:
+                    installation_tz = installation_info['timezone']
+                    
+                    # Validate date range with new 2-week limit
+                    validation_result = timezone_service.validate_date_range(
+                        start_time=start_time,
+                        end_time=end_time,
+                        tz_name=installation_tz,
+                        today_override=today_override
+                    )
+                    
+                    if not validation_result.get('is_valid', True):
+                        error_msg = "Invalid date range: " + "; ".join(validation_result.get('warnings', []))
+                        recommendations = validation_result.get('recommendations', [])
+                        if recommendations:
+                            error_msg += "\n\nRecommendations:\n" + "\n".join(recommendations)
+                        
+                        return jsonify({
+                            'error': error_msg,
+                            'validation_details': validation_result
+                        }), 400
+                        
+            except Exception as e:
+                logger.warning(f"Date validation error: {e}")
+                return jsonify({'error': 'Invalid date format. Please use YYYY-MM-DD format.'}), 400
+
         # Process query through orchestrator
         result = query_orchestrator.process_query(
             message=message,
