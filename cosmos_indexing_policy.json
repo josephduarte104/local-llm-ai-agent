@@ -1,0 +1,84 @@
+{
+  "indexingMode": "consistent",
+  "automatic": true,
+  "includedPaths": [
+    {
+      "path": "/*"
+    }
+  ],
+  "excludedPaths": [
+    {
+      "path": "/\"_etag\"/?"
+    }
+  ],
+  "compositeIndexes": [
+    {
+      "comment": "Optimized index for time-range queries on CarModeChanged events",
+      "paths": [
+        {
+          "path": "/installationId",
+          "order": "ascending"
+        },
+        {
+          "path": "/dataType",
+          "order": "ascending"
+        },
+        {
+          "path": "/kafkaMessage/Timestamp",
+          "order": "ascending"
+        }
+      ]
+    },
+    {
+      "comment": "Optimized index for machine-specific CarModeChanged queries",
+      "paths": [
+        {
+          "path": "/installationId",
+          "order": "ascending"
+        },
+        {
+          "path": "/dataType", 
+          "order": "ascending"
+        },
+        {
+          "path": "/kafkaMessage/CarModeChanged/MachineId",
+          "order": "ascending"
+        },
+        {
+          "path": "/kafkaMessage/Timestamp",
+          "order": "ascending"
+        }
+      ]
+    },
+    {
+      "comment": "Optimized index for Door event queries",
+      "paths": [
+        {
+          "path": "/installationId",
+          "order": "ascending"
+        },
+        {
+          "path": "/dataType",
+          "order": "ascending"
+        },
+        {
+          "path": "/kafkaMessage/Timestamp",
+          "order": "ascending"
+        }
+      ]
+    },
+    {
+      "comment": "Index for machine ID lookups across data types",
+      "paths": [
+        {
+          "path": "/installationId",
+          "order": "ascending"
+        },
+        {
+          "path": "/dataType",
+          "order": "ascending"
+        }
+      ]
+    }
+  ]
+}

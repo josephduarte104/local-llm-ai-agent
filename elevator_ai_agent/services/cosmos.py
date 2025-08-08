@@ -2,7 +2,9 @@
 
 import os
 import logging
+import time
 from typing import Iterator, List, Dict, Any, Optional
+from functools import lru_cache
 from azure.cosmos import CosmosClient
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
@@ -25,19 +27,26 @@ class CosmosService:
         self.client = CosmosClient(self.uri, self.key)
         self.database = self.client.get_database_client(self.database_name)
         self.container = self.database.get_container_client(self.container_name)
+        
+        # Cache for frequently accessed data
+        self._machine_ids_cache = {}
+        self._cache_ttl = 300  # 5 minutes TTL
     
+    @lru_cache(maxsize=128)
     def get_installations(self) -> List[Dict[str, str]]:
         """
-        Get list of installations with their timezones.
+        Get list of installations with their timezones (cached).
         
         Returns:
             List of {installationId, timezone} dictionaries
         """
         try:
             query = "SELECT c.installations FROM c WHERE c.id = 'installation-list'"
+            # Use point lookup instead of cross-partition query when possible
             items = list(self.container.query_items(
                 query=query,
-                enable_cross_partition_query=True
+                enable_cross_partition_query=True,  # Keep for now, optimize later with partition key
+                max_item_count=1
             ))
             
             if items and 'installations' in items[0]:
@@ -85,13 +94,14 @@ class CosmosService:
             Event documents
         """
         try:
-            # Base query using a more robust way to handle the data_type field
+            # Optimized query with specific field selection to reduce data transfer
             query_text = (
                 "SELECT c.kafkaMessage.Timestamp, c.kafkaMessage.EventCase, c.kafkaMessage[@dataType] AS EventDetails "
                 "FROM c "
                 "WHERE c.installationId = @installationId "
                 "AND c.dataType = @dataType "
-                "AND c.kafkaMessage.Timestamp BETWEEN @startTs AND @endTs "
+                "AND c.kafkaMessage.Timestamp >= @startTs "
+                "AND c.kafkaMessage.Timestamp <= @endTs "
                 "AND IS_DEFINED(c.kafkaMessage[@dataType])"
             )
             
@@ -175,24 +185,25 @@ class CosmosService:
                 logger.error(f"Data exploration failed: {explore_e}")
                 raise
             
-            # Now try the original complex query with better error handling
+            # Optimized query with better field selection and index-friendly WHERE order
             query = """
                 SELECT 
-                    c.kafkaMessage.Timestamp,
-                    c.kafkaMessage.CarModeChanged.MachineId,
-                    c.kafkaMessage.CarModeChanged.ModeName,
-                    c.kafkaMessage.CarModeChanged.CarMode,
-                    c.kafkaMessage.CarModeChanged.AlarmSeverity
+                    c.kafkaMessage.Timestamp as Timestamp,
+                    c.kafkaMessage.CarModeChanged.MachineId as MachineId,
+                    c.kafkaMessage.CarModeChanged.ModeName as ModeName,
+                    c.kafkaMessage.CarModeChanged.CarMode as CarMode,
+                    c.kafkaMessage.CarModeChanged.AlarmSeverity as AlarmSeverity
                 FROM c
                 WHERE c.installationId = @installationId
-                  AND c.dataType = "CarModeChanged"
+                  AND c.dataType = @dataType
                   AND c.kafkaMessage.Timestamp >= @startTs 
                   AND c.kafkaMessage.Timestamp <= @endTs
-                  AND IS_DEFINED(c.kafkaMessage.Timestamp)
+                  AND IS_DEFINED(c.kafkaMessage.CarModeChanged.MachineId)
             """
             
             parameters: List[Dict[str, Any]] = [
                 {"name": "@installationId", "value": installation_id},
+                {"name": "@dataType", "value": "CarModeChanged"},
                 {"name": "@startTs", "value": start_ts},
                 {"name": "@endTs", "value": end_ts}
             ]
@@ -224,7 +235,7 @@ class CosmosService:
 
     def get_all_machine_ids(self, installation_id: str, data_type: str = "CarModeChanged") -> List[str]:
         """
-        Get all machine IDs that exist for an installation for a specific data type.
+        Get all machine IDs that exist for an installation for a specific data type (with caching).
         
         Args:
             installation_id: The installation to query
@@ -233,10 +244,21 @@ class CosmosService:
         Returns:
             List of machine IDs as strings
         """
+        # Check cache first
+        cache_key = f"{installation_id}:{data_type}"
+        current_time = time.time()
+        
+        if cache_key in self._machine_ids_cache:
+            cached_data, cache_time = self._machine_ids_cache[cache_key]
+            if current_time - cache_time < self._cache_ttl:
+                logger.info(f"Using cached machine IDs for {installation_id}:{data_type}")
+                return cached_data
+        
         try:
             # Construct the field name dynamically
             machine_id_field = f"c.kafkaMessage.{data_type}.MachineId"
 
+            # Optimized query with limited result set
             query = f"""
                 SELECT DISTINCT VALUE {machine_id_field}
                 FROM c
@@ -250,12 +272,13 @@ class CosmosService:
                 {"name": "@dataType", "value": data_type}
             ]
             
-            logger.info(f"Getting all machine IDs for installation: {installation_id} and data type: {data_type}")
+            logger.info(f"Fetching machine IDs for installation: {installation_id} and data type: {data_type}")
             
             query_iterator = self.container.query_items(
                 query=query,
                 parameters=parameters,
-                enable_cross_partition_query=True
+                enable_cross_partition_query=True,
+                max_item_count=100  # Machine IDs should be a small set
             )
             
             machine_ids = [str(item) for item in query_iterator if item is not None]
@@ -263,7 +286,10 @@ class CosmosService:
             # Remove duplicates and sort
             unique_machine_ids = sorted(list(set(machine_ids)))
             
-            logger.info(f"Found machine IDs: {unique_machine_ids}")
+            # Cache the result
+            self._machine_ids_cache[cache_key] = (unique_machine_ids, current_time)
+            
+            logger.info(f"Found and cached {len(unique_machine_ids)} machine IDs")
             return unique_machine_ids
                 
         except Exception as e:
@@ -289,45 +315,53 @@ class CosmosService:
             Door event documents with flattened structure
         """
         try:
-            # Use simple query and filter timestamps in Python to avoid Cosmos DB issues
+            # Optimized query - move timestamp filtering to SQL to reduce data transfer
             query = """
-                SELECT c.kafkaMessage.Timestamp, c.kafkaMessage.Door
+                SELECT 
+                    c.kafkaMessage.Timestamp as Timestamp,
+                    c.kafkaMessage.Door.MachineId as MachineId,
+                    c.kafkaMessage.Door.State as State,
+                    c.kafkaMessage.Door.Door.Deck as Deck,
+                    c.kafkaMessage.Door.Door.Side as Side
                 FROM c
                 WHERE c.installationId = @installationId
-                  AND c.dataType = "Door"
+                  AND c.dataType = @dataType
+                  AND c.kafkaMessage.Timestamp >= @startTs
+                  AND c.kafkaMessage.Timestamp <= @endTs
                   AND IS_DEFINED(c.kafkaMessage.Door)
             """
             
             parameters = [
-                {"name": "@installationId", "value": installation_id}
+                {"name": "@installationId", "value": installation_id},
+                {"name": "@dataType", "value": "Door"},
+                {"name": "@startTs", "value": start_ts},
+                {"name": "@endTs", "value": end_ts}
             ]
             
-            logger.info(f"Executing door events query for installation: {installation_id}, filtering {start_ts} to {end_ts} in Python")
+            logger.info(f"Optimized door events query for installation: {installation_id}, range: {start_ts} to {end_ts}")
             
             query_iterator = self.container.query_items(
                 query=query,
                 parameters=parameters,
-                enable_cross_partition_query=True
+                enable_cross_partition_query=True,
+                max_item_count=1000
             )
             
             for item in query_iterator:
+                # Data is already filtered and flattened by SQL query
                 timestamp = item.get("Timestamp")
                 
-                # Filter by timestamp in Python
-                if timestamp is None or timestamp < start_ts or timestamp > end_ts:
+                # Skip if timestamp is still None (shouldn't happen with SQL filtering)
+                if timestamp is None:
                     continue
                 
-                # Extract the nested fields in Python to avoid Cosmos DB query issues
-                door_data = item.get("Door", {})
-                door_details = door_data.get("Door", {})
-                
-                # Create a flattened structure
+                # Data is already flattened by the SELECT statement
                 flattened_event = {
                     "Timestamp": timestamp,
-                    "MachineId": door_data.get("MachineId"),
-                    "State": door_data.get("State"),
-                    "Deck": door_details.get("Deck"),
-                    "Side": door_details.get("Side")
+                    "MachineId": item.get("MachineId"),
+                    "State": item.get("State"),
+                    "Deck": item.get("Deck"),
+                    "Side": item.get("Side")
                 }
                 
                 yield flattened_event
@@ -335,6 +369,13 @@ class CosmosService:
         except Exception as e:
             logger.error(f"Error querying door events: {e}", exc_info=True)
             raise
+
+    def clear_cache(self):
+        """Clear all caches for fresh data."""
+        self._machine_ids_cache.clear()
+        self.get_installations.cache_clear()
+        logger.info("Cosmos service caches cleared")
+
 
 # Global instance - will be initialized when needed
 cosmos_service = None

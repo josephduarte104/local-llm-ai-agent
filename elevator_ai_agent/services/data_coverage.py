@@ -104,15 +104,23 @@ class DataCoverageService:
             # Calculate expected time
             total_expected_minutes = (end_time - start_time).total_seconds() / 60.0
             
-            # Check data availability for CarModeChanged events (primary data source)
-            car_mode_coverage = DataCoverageService._analyze_car_mode_coverage(
-                installation_id, start_time, end_time, installation_tz, target_machine_ids
-            )
+            # Use parallel processing for coverage analysis to reduce latency
+            from concurrent.futures import ThreadPoolExecutor
             
-            # Check data availability for Door events
-            door_coverage = DataCoverageService._analyze_door_coverage(
-                installation_id, start_time, end_time, installation_tz, target_machine_ids
-            )
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                # Run CarMode and Door coverage analysis in parallel
+                car_mode_future = executor.submit(
+                    DataCoverageService._analyze_car_mode_coverage,
+                    installation_id, start_time, end_time, installation_tz, target_machine_ids
+                )
+                door_future = executor.submit(
+                    DataCoverageService._analyze_door_coverage,
+                    installation_id, start_time, end_time, installation_tz, target_machine_ids
+                )
+                
+                # Get results
+                car_mode_coverage = car_mode_future.result()
+                door_coverage = door_future.result()
             
             # Determine available data types
             data_types_available = []
