@@ -36,6 +36,15 @@ class ElevatorOpsApp {
         document.getElementById('messageInput').addEventListener('input', (e) => {
             this.autoResizeTextarea(e.target);
         });
+
+        // Date range validation
+        document.getElementById('startDate').addEventListener('change', () => {
+            this.validateDateRange();
+        });
+        
+        document.getElementById('endDate').addEventListener('change', () => {
+            this.validateDateRange();
+        });
     }
 
     async loadInstallations() {
@@ -118,28 +127,48 @@ class ElevatorOpsApp {
         const timezoneDisplay = document.getElementById('timezoneDisplay');
 
         if (this.currentInstallation) {
-            messageInput.disabled = false;
-            sendButton.disabled = false;
+            // Check date range validity first
+            const isDateRangeValid = this.validateDateRange();
+            
+            messageInput.disabled = !isDateRangeValid;
+            sendButton.disabled = !isDateRangeValid;
             messageInput.placeholder = `Ask about ${this.currentInstallation.installationId}...`;
-            statusMessage.textContent = `Ready to analyze ${this.currentInstallation.installationId}`;
+            
+            if (isDateRangeValid) {
+                statusMessage.textContent = `Ready to analyze ${this.currentInstallation.installationId}`;
+                statusMessage.className = 'text-sm text-gray-500 mt-2';
+            }
+            // If date range is invalid, validateDateRange() already set the error message
+            
             timezoneDisplay.textContent = `Timezone: ${this.currentInstallation.timezone}`;
-            messageInput.focus();
+            if (isDateRangeValid) {
+                messageInput.focus();
+            }
         } else {
             messageInput.disabled = true;
             sendButton.disabled = true;
             messageInput.placeholder = 'Select an installation first...';
             statusMessage.textContent = 'Select an installation to start asking questions';
+            statusMessage.className = 'text-sm text-gray-500 mt-2';
             timezoneDisplay.textContent = 'Select installation';
         }
     }
 
     setDefaultDateRange() {
         const now = new Date();
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(now.getDate() - 7);
+        // End date must be yesterday (cannot include current day)
+        const yesterday = new Date();
+        yesterday.setDate(now.getDate() - 1);
+        
+        // Start date should be 7 days before yesterday (8 days ago from today)
+        const sevenDaysBeforeYesterday = new Date();
+        sevenDaysBeforeYesterday.setDate(yesterday.getDate() - 7);
 
-        document.getElementById('endDate').value = now.toISOString().split('T')[0];
-        document.getElementById('startDate').value = sevenDaysAgo.toISOString().split('T')[0];
+        document.getElementById('endDate').value = yesterday.toISOString().split('T')[0];
+        document.getElementById('startDate').value = sevenDaysBeforeYesterday.toISOString().split('T')[0];
+        
+        // Set max date attributes to enforce limits
+        this.setDateLimits();
     }
 
     async sendMessage() {
@@ -147,6 +176,11 @@ class ElevatorOpsApp {
         const message = messageInput.value.trim();
         
         if (!message || !this.currentInstallation) {
+            return;
+        }
+
+        // Validate date range before sending
+        if (!this.validateDateRange()) {
             return;
         }
 
@@ -196,6 +230,11 @@ class ElevatorOpsApp {
             
             // Add response
             this.addMessage('assistant', data.answer);
+
+            // Add data coverage information if available
+            if (data.data_coverage) {
+                this.addDataCoverageInfo(data.data_coverage);
+            }
 
             // Add timezone footnote
             if (data.installation_tz) {
@@ -285,6 +324,78 @@ class ElevatorOpsApp {
         }
     }
 
+    addDataCoverageInfo(dataCoverage) {
+        const chatMessages = document.getElementById('chatMessages');
+        
+        const coverageDiv = document.createElement('div');
+        coverageDiv.className = 'mx-12 mb-4'; // Align with assistant messages
+        
+        // Determine coverage status styling
+        const overallCoverage = dataCoverage.overall_coverage?.coverage_percentage || 0;
+        let statusClass, statusIcon;
+        
+        if (overallCoverage >= 90) {
+            statusClass = 'bg-green-50 border-green-200 text-green-800';
+            statusIcon = '✅';
+        } else if (overallCoverage >= 70) {
+            statusClass = 'bg-yellow-50 border-yellow-200 text-yellow-800';
+            statusIcon = '⚠️';
+        } else {
+            statusClass = 'bg-red-50 border-red-200 text-red-800';
+            statusIcon = '❌';
+        }
+        
+        // Build coverage details
+        const machinesInfo = dataCoverage.machines;
+        const timeRange = dataCoverage.time_range;
+        const dataTypes = dataCoverage.data_types_available || [];
+        
+        let coverageDetails = '';
+        if (dataCoverage.coverage_warnings && dataCoverage.coverage_warnings.length > 0) {
+            coverageDetails = '<div class="mt-2 space-y-1">';
+            dataCoverage.coverage_warnings.forEach(warning => {
+                coverageDetails += `<div class="text-sm">${this.escapeHtml(warning)}</div>`;
+            });
+            coverageDetails += '</div>';
+        }
+        
+        coverageDiv.innerHTML = `
+            <div class="border ${statusClass} rounded-lg p-3">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg">${statusIcon}</span>
+                        <div>
+                            <div class="font-medium">Data Coverage: ${overallCoverage.toFixed(1)}%</div>
+                            <div class="text-sm opacity-75">
+                                ${machinesInfo.with_data}/${machinesInfo.total} elevators | 
+                                ${dataTypes.join(', ') || 'No data'} events
+                            </div>
+                        </div>
+                    </div>
+                    <button class="text-sm underline" onclick="this.parentElement.parentElement.querySelector('.coverage-details').classList.toggle('hidden')">
+                        Details
+                    </button>
+                </div>
+                <div class="coverage-details hidden mt-3 pt-3 border-t border-current border-opacity-20">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <div>
+                            <div class="font-medium">Period</div>
+                            <div class="opacity-75">${timeRange.start.split('T')[0]} to ${timeRange.end.split('T')[0]}</div>
+                        </div>
+                        <div>
+                            <div class="font-medium">Data Quality</div>
+                            <div class="opacity-75">${overallCoverage >= 90 ? 'Excellent' : overallCoverage >= 70 ? 'Good' : 'Limited'}</div>
+                        </div>
+                    </div>
+                    ${coverageDetails}
+                </div>
+            </div>
+        `;
+        
+        chatMessages.appendChild(coverageDiv);
+        this.scrollToBottom();
+    }
+
     addTimezoneFootnote(timezone) {
         const chatMessages = document.getElementById('chatMessages');
         
@@ -350,6 +461,90 @@ class ElevatorOpsApp {
     hideError() {
         // Error messages are shown as chat messages, so this method
         // doesn't need to do anything specific for now
+    }
+
+    setDateLimits() {
+        const now = new Date();
+        const yesterday = new Date();
+        yesterday.setDate(now.getDate() - 1);
+        
+        // Set max date to yesterday for both inputs
+        const maxDate = yesterday.toISOString().split('T')[0];
+        document.getElementById('startDate').setAttribute('max', maxDate);
+        document.getElementById('endDate').setAttribute('max', maxDate);
+    }
+
+    validateDateRange() {
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+        const statusMessage = document.getElementById('statusMessage');
+
+        // Clear any existing validation styling
+        document.getElementById('startDate').classList.remove('border-red-500');
+        document.getElementById('endDate').classList.remove('border-red-500');
+
+        if (!startDate || !endDate) {
+            return true; // Allow empty dates
+        }
+
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const now = new Date();
+        const yesterday = new Date();
+        yesterday.setDate(now.getDate() - 1);
+
+        let isValid = true;
+        let errorMessage = '';
+
+        // Check if end date is today or in the future
+        if (end >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
+            isValid = false;
+            errorMessage = 'End date cannot be current day or in the future. Latest allowed: ' + yesterday.toISOString().split('T')[0];
+            document.getElementById('endDate').classList.add('border-red-500');
+        }
+
+        // Check if start date is in the future
+        if (start > yesterday) {
+            isValid = false;
+            errorMessage = 'Start date cannot be in the future. Latest allowed: ' + yesterday.toISOString().split('T')[0];
+            document.getElementById('startDate').classList.add('border-red-500');
+        }
+
+        // Check if start date is after end date
+        if (start >= end) {
+            isValid = false;
+            errorMessage = 'Start date must be before end date';
+            document.getElementById('startDate').classList.add('border-red-500');
+            document.getElementById('endDate').classList.add('border-red-500');
+        }
+
+        // Check 2-week (14 days) maximum range
+        const diffTime = Math.abs(end - start);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        if (diffDays > 14) {
+            isValid = false;
+            errorMessage = `Date range too large: ${diffDays} days (maximum: 14 days/2 weeks)`;
+            document.getElementById('startDate').classList.add('border-red-500');
+            document.getElementById('endDate').classList.add('border-red-500');
+        }
+
+        // Update UI based on validation
+        if (!isValid) {
+            statusMessage.textContent = `❌ ${errorMessage}`;
+            statusMessage.className = 'text-sm text-red-500 mt-2';
+            document.getElementById('sendButton').disabled = true;
+            document.getElementById('messageInput').disabled = true;
+        } else {
+            if (this.currentInstallation) {
+                statusMessage.textContent = `Ready to analyze ${this.currentInstallation.installationId}`;
+                statusMessage.className = 'text-sm text-gray-500 mt-2';
+                document.getElementById('sendButton').disabled = false;
+                document.getElementById('messageInput').disabled = false;
+            }
+        }
+
+        return isValid;
     }
 }
 

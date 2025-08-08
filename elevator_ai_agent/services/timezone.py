@@ -134,11 +134,13 @@ class TimezoneService:
     ) -> dict:
         """
         Validate date range and provide guidance for future dates.
+        Enforces 2-week maximum range excluding current day.
         
         Args:
             start_time: Start datetime (timezone-aware)
             end_time: End datetime (timezone-aware)
             tz_name: IANA timezone name
+            today_override: Optional override for "today" (for testing)
             
         Returns:
             Dictionary with validation results and recommendations
@@ -146,9 +148,12 @@ class TimezoneService:
         from datetime import datetime, timezone as dt_timezone
         
         # Get current time in the installation's timezone
-        current_utc = datetime.now(dt_timezone.utc)
-        target_tz = ZoneInfo(tz_name)
-        current_local = current_utc.astimezone(target_tz)
+        if today_override:
+            current_local = today_override
+        else:
+            current_utc = datetime.now(dt_timezone.utc)
+            target_tz = ZoneInfo(tz_name)
+            current_local = current_utc.astimezone(target_tz)
         
         result = {
             'is_valid': True,
@@ -169,7 +174,7 @@ class TimezoneService:
             result['is_valid'] = False
             result['warnings'].append(f"⚠️ End date {end_time.date().isoformat()} is in the future")
             result['recommendations'].append(f"📅 Latest available date: {current_local.date().isoformat()}")
-            result['recommendations'].append(f"� Current time ({tz_name}): {current_local.strftime('%Y-%m-%d %H:%M:%S')}")
+            result['recommendations'].append(f"🕐 Current time ({tz_name}): {current_local.strftime('%Y-%m-%d %H:%M:%S')}")
             result['recommendations'].append("💡 Please use a date range that ends today or in the past")
         
         # Check date range validity
@@ -177,7 +182,33 @@ class TimezoneService:
             result['is_valid'] = False
             result['warnings'].append("⚠️ Start date must be before end date")
         
-        # Check for very large date ranges
+        # NEW: Check for 2-week maximum range (excluding current day)
+        # Calculate the latest valid end date (yesterday)
+        yesterday = current_local.date() - timedelta(days=1)
+        
+        # Check if end date is current day (not allowed)
+        if end_time.date() >= current_local.date():
+            result['is_valid'] = False
+            result['warnings'].append(f"⚠️ End date cannot be current day ({current_local.date().isoformat()})")
+            result['recommendations'].append(f"📅 Latest allowed end date: {yesterday.isoformat()}")
+            result['recommendations'].append("💡 Date range cannot include the current day")
+        
+        # Check 2-week (14 days) maximum range for valid dates
+        if result['is_valid']:
+            range_days = (end_time.date() - start_time.date()).days
+            max_days = 14  # 2 weeks
+            
+            if range_days > max_days:
+                result['is_valid'] = False
+                result['warnings'].append(f"⚠️ Date range too large: {range_days} days (maximum: {max_days} days)")
+                
+                # Calculate the earliest valid start date for the given end date
+                earliest_start = end_time.date() - timedelta(days=max_days)
+                result['recommendations'].append(f"📅 For end date {end_time.date().isoformat()}, earliest start date: {earliest_start.isoformat()}")
+                result['recommendations'].append(f"💡 Maximum allowed range: {max_days} days (2 weeks)")
+                result['recommendations'].append("🔧 Please select a shorter date range")
+        
+        # Check for very large date ranges (this warning is now less relevant due to 14-day limit)
         range_days = (end_time - start_time).days
         if range_days > 365:
             result['warnings'].append(f"⚠️ Large date range: {range_days} days. Consider smaller ranges for better performance")
