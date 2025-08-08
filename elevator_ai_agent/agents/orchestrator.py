@@ -10,6 +10,7 @@ from ..services.timezone import timezone_service
 from ..services.data_coverage import data_coverage_service
 from ..tools.car_mode_changed import car_mode_changed_tool
 from ..tools.door_cycles import door_cycles_tool
+from ..tools.data_coverage_tool import data_coverage_tool
 from ..tools.basic_tools import door_tool, passenger_report_tool, hall_call_accepted_tool
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class QueryOrchestrator:
         self.tools = {
             'uptime_analysis': car_mode_changed_tool,
             'door_cycle_analysis': door_cycles_tool,
+            'data_coverage_analysis': data_coverage_tool,
             # The following tools are stubs and would need to be implemented
             # 'door_analysis': door_tool,
             # 'passenger_analysis': passenger_report_tool,
@@ -69,6 +71,32 @@ class QueryOrchestrator:
             start_time = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
         
         return start_time, end_time
+
+    def _select_appropriate_tool(self, message_lower: str) -> str:
+        """Select the most appropriate tool based on the user's question."""
+        
+        # Data coverage and quality questions
+        data_coverage_keywords = [
+            'coverage', 'data quality', 'data availability', 'missing data', 'data gaps',
+            'incomplete data', 'data completeness', 'reporting', 'silent', 'no data',
+            'data span', 'event count', 'how much data', 'data reliability',
+            'data issues', 'connectivity', 'sensors', 'collection', 'monitoring'
+        ]
+        
+        # Door operation questions  
+        door_keywords = ['door', 'cycle', 'open', 'close', 'deck', 'side']
+        
+        # Check for data coverage questions first (highest priority for new capability)
+        if any(keyword in message_lower for keyword in data_coverage_keywords):
+            return 'data_coverage_analysis'
+        
+        # Check for door-related questions
+        elif any(keyword in message_lower for keyword in door_keywords):
+            return 'door_cycle_analysis'
+        
+        # Default to uptime analysis for operational questions
+        else:
+            return 'uptime_analysis'
 
     def process_query(
         self,
@@ -133,11 +161,10 @@ class QueryOrchestrator:
                         f"{data_coverage_report.machines_with_data}/{data_coverage_report.machines_total} elevators with data")
 
             # 4. Run tools to get structured data
-            # For this refactoring, we'll assume the primary tool is always uptime_analysis.
-            # A more advanced implementation would use the LLM to select the tool.
-            tool_name = 'uptime_analysis' 
-            if 'door' in message.lower() or 'cycle' in message.lower():
-                tool_name = 'door_cycle_analysis'
+            # Enhanced tool selection based on question content
+            tool_name = self._select_appropriate_tool(message.lower())
+            
+            logger.info(f"Selected tool: {tool_name} for query: {message}")
             
             tool = self.tools[tool_name]
             
@@ -246,6 +273,17 @@ You are an expert Elevator Operations Analyst. Your role is to analyze elevator 
 9.  The current timezone for the installation is {timezone}. All timestamps in your response should be assumed to be in this timezone.
 10. Do not include the raw JSON data in your final response. Your response should be a direct answer to the user's question, based on your analysis of the data.
 11. **ALWAYS include the provided data coverage summary at the end of your response.** This helps users understand the completeness and reliability of the analysis.
+
+**Data Coverage Questions:**
+When users ask about data coverage, quality, availability, or related topics, you can now provide detailed answers including:
+- Overall coverage percentages and data quality assessments
+- Machine-specific reporting status and coverage details
+- Data gaps, missing periods, and reliability issues
+- Event counts and data span information
+- Recommendations for improving data collection
+- Silent or non-reporting elevators identification
+- Data type availability (CarModeChanged, Door events, etc.)
+- Coverage trends and daily breakdowns
 
 **Example of a good response:**
 
