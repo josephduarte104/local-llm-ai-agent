@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from ..services.cosmos import get_cosmos_service
 from ..services.llm import llm_service
 from ..services.timezone import timezone_service
+from ..services.data_coverage import data_coverage_service
 from ..tools.car_mode_changed import car_mode_changed_tool
 from ..tools.door_cycles import door_cycles_tool
 from ..tools.basic_tools import door_tool, passenger_report_tool, hall_call_accepted_tool
@@ -120,7 +121,18 @@ class QueryOrchestrator:
                     today_override, installation_tz
                 )
 
-            # 3. Run tools to get structured data
+            # 3. Analyze data coverage for the requested period
+            data_coverage_report = data_coverage_service.analyze_coverage(
+                installation_id=installation_id,
+                start_time=start_time,
+                end_time=end_time,
+                installation_tz=installation_tz
+            )
+            
+            logger.debug(f"Data coverage: {data_coverage_report.overall_coverage_percentage:.1f}% coverage, "
+                        f"{data_coverage_report.machines_with_data}/{data_coverage_report.machines_total} elevators with data")
+
+            # 4. Run tools to get structured data
             # For this refactoring, we'll assume the primary tool is always uptime_analysis.
             # A more advanced implementation would use the LLM to select the tool.
             tool_name = 'uptime_analysis' 
@@ -139,13 +151,18 @@ class QueryOrchestrator:
 
             logger.debug(f"Tool '{tool_name}' returned data: {json.dumps(tool_results, default=str, indent=2)}")
 
-            # Pre-LLM check: If no elevators had data, return a direct response
+            # Pre-LLM check: If no elevators had data, return a direct response with coverage info
             if tool_results.get('installation_summary', {}).get('elevators_with_data') == 0:
                 logger.info(f"No data found for installation {installation_id}. Bypassing LLM.")
+                
+                # Generate comprehensive no-data response with coverage details
+                coverage_details = self._format_coverage_summary(data_coverage_report)
+                
                 answer = (
                     f"I could not find any operational data for installation "
                     f"`{installation_id}` in the specified date range "
                     f"({start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')}).\n\n"
+                    f"**Data Coverage Summary:**\n{coverage_details}\n\n"
                     "This could mean:\n"
                     "- The elevators were not reporting data during this period.\n"
                     "- The installation ID or date range might be incorrect.\n\n"
@@ -154,6 +171,7 @@ class QueryOrchestrator:
                 return {
                     'answer': answer,
                     'tool_results': tool_results,
+                    'data_coverage': data_coverage_report.to_dict(),
                     'installation_id': installation_id,
                     'installation_tz': installation_tz,
                     'time_range': {
@@ -165,7 +183,7 @@ class QueryOrchestrator:
             # Preserve the original tool_results to be returned later
             original_tool_results = tool_results.copy()
             
-            # 4. Generate response using the LLM
+            # 5. Generate response using the LLM with data coverage context
             system_prompt = self._get_system_prompt(installation_tz)
             
             # Create a cleaned version of the tool results for the LLM prompt
@@ -175,12 +193,14 @@ class QueryOrchestrator:
                     metric.pop('intervals', None)
                     metric.pop('daily_availability', None)
 
+            # Add data coverage information to the LLM context
+            coverage_summary = self._format_coverage_summary(data_coverage_report)
             tool_context = json.dumps(prompt_tool_results, indent=2, default=str)
             logger.debug(f"Context passed to LLM:\n{tool_context}")
 
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Please analyze the following data for installation {installation_id} from {start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')} and answer this question: '{message}'\n\n```json\n{tool_context}\n```"},
+                {"role": "user", "content": f"Please analyze the following data for installation {installation_id} from {start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')} and answer this question: '{message}'\n\n**IMPORTANT:** Always include the data coverage summary at the end of your response.\n\n**Data Coverage Summary:**\n{coverage_summary}\n\n**Analysis Data:**\n```json\n{tool_context}\n```"},
             ]
 
             llm_response = llm_service.chat_completion(messages)
@@ -190,9 +210,13 @@ class QueryOrchestrator:
 
             logger.debug(f"LLM generated response:\n{llm_response}")
 
+            # Ensure coverage information is included in the final response
+            final_answer = self._ensure_coverage_in_response(llm_response, coverage_summary)
+
             return {
-                'answer': llm_response,
+                'answer': final_answer,
                 'tool_results': original_tool_results, # Return the original, detailed results
+                'data_coverage': data_coverage_report.to_dict(),
                 'installation_id': installation_id,
                 'installation_tz': installation_tz,
                 'time_range': {
@@ -221,6 +245,7 @@ You are an expert Elevator Operations Analyst. Your role is to analyze elevator 
 8.  Do not just repeat the JSON data. Synthesize it into a human-readable analysis.
 9.  The current timezone for the installation is {timezone}. All timestamps in your response should be assumed to be in this timezone.
 10. Do not include the raw JSON data in your final response. Your response should be a direct answer to the user's question, based on your analysis of the data.
+11. **ALWAYS include the provided data coverage summary at the end of your response.** This helps users understand the completeness and reliability of the analysis.
 
 **Example of a good response:**
 
@@ -234,7 +259,51 @@ You are an expert Elevator Operations Analyst. Your role is to analyze elevator 
 > *   **Elevator 3:** 98.8% uptime (166.0 hours)
 >
 > All elevators are performing well, with uptime percentages above the 95% industry standard.
+>
+> ---
+> **Data Coverage Summary:**
+> ✅ **95.2%** overall data coverage | 📊 **3/3** elevators with data | 📈 **CarModeChanged** events available
 """
+
+    def _format_coverage_summary(self, coverage_report) -> str:
+        """Format data coverage information for display."""
+        coverage_pct = coverage_report.overall_coverage_percentage
+        machines_info = f"{coverage_report.machines_with_data}/{coverage_report.machines_total}"
+        
+        # Choose appropriate emoji based on coverage percentage
+        if coverage_pct >= 90:
+            coverage_emoji = "✅"
+        elif coverage_pct >= 70:
+            coverage_emoji = "⚠️"
+        else:
+            coverage_emoji = "❌"
+        
+        summary_parts = [
+            f"{coverage_emoji} **{coverage_pct:.1f}%** overall data coverage",
+            f"📊 **{machines_info}** elevators with data"
+        ]
+        
+        # Add data types available
+        if coverage_report.data_types_available:
+            data_types_str = ", ".join(coverage_report.data_types_available)
+            summary_parts.append(f"📈 **{data_types_str}** events available")
+        
+        # Add warnings if any
+        if coverage_report.coverage_warnings:
+            for warning in coverage_report.coverage_warnings[:2]:  # Show first 2 warnings
+                summary_parts.append(warning)
+        
+        return " | ".join(summary_parts)
+    
+    def _ensure_coverage_in_response(self, llm_response: str, coverage_summary: str) -> str:
+        """Ensure that data coverage information is included in the response."""
+        # Check if the LLM already included coverage information
+        if "data coverage" in llm_response.lower() or "coverage summary" in llm_response.lower():
+            return llm_response
+        
+        # If not, append it
+        separator = "\n\n---\n**Data Coverage Summary:**\n"
+        return llm_response + separator + coverage_summary
 
 
 # Global instance

@@ -231,6 +231,11 @@ class ElevatorOpsApp {
             // Add response
             this.addMessage('assistant', data.answer);
 
+            // Add data coverage information if available
+            if (data.data_coverage) {
+                this.addDataCoverageInfo(data.data_coverage);
+            }
+
             // Add timezone footnote
             if (data.installation_tz) {
                 this.addTimezoneFootnote(data.installation_tz);
@@ -317,6 +322,78 @@ class ElevatorOpsApp {
         if (typingElement) {
             typingElement.remove();
         }
+    }
+
+    addDataCoverageInfo(dataCoverage) {
+        const chatMessages = document.getElementById('chatMessages');
+        
+        const coverageDiv = document.createElement('div');
+        coverageDiv.className = 'mx-12 mb-4'; // Align with assistant messages
+        
+        // Determine coverage status styling
+        const overallCoverage = dataCoverage.overall_coverage?.coverage_percentage || 0;
+        let statusClass, statusIcon;
+        
+        if (overallCoverage >= 90) {
+            statusClass = 'bg-green-50 border-green-200 text-green-800';
+            statusIcon = '✅';
+        } else if (overallCoverage >= 70) {
+            statusClass = 'bg-yellow-50 border-yellow-200 text-yellow-800';
+            statusIcon = '⚠️';
+        } else {
+            statusClass = 'bg-red-50 border-red-200 text-red-800';
+            statusIcon = '❌';
+        }
+        
+        // Build coverage details
+        const machinesInfo = dataCoverage.machines;
+        const timeRange = dataCoverage.time_range;
+        const dataTypes = dataCoverage.data_types_available || [];
+        
+        let coverageDetails = '';
+        if (dataCoverage.coverage_warnings && dataCoverage.coverage_warnings.length > 0) {
+            coverageDetails = '<div class="mt-2 space-y-1">';
+            dataCoverage.coverage_warnings.forEach(warning => {
+                coverageDetails += `<div class="text-sm">${this.escapeHtml(warning)}</div>`;
+            });
+            coverageDetails += '</div>';
+        }
+        
+        coverageDiv.innerHTML = `
+            <div class="border ${statusClass} rounded-lg p-3">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg">${statusIcon}</span>
+                        <div>
+                            <div class="font-medium">Data Coverage: ${overallCoverage.toFixed(1)}%</div>
+                            <div class="text-sm opacity-75">
+                                ${machinesInfo.with_data}/${machinesInfo.total} elevators | 
+                                ${dataTypes.join(', ') || 'No data'} events
+                            </div>
+                        </div>
+                    </div>
+                    <button class="text-sm underline" onclick="this.parentElement.parentElement.querySelector('.coverage-details').classList.toggle('hidden')">
+                        Details
+                    </button>
+                </div>
+                <div class="coverage-details hidden mt-3 pt-3 border-t border-current border-opacity-20">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <div>
+                            <div class="font-medium">Period</div>
+                            <div class="opacity-75">${timeRange.start.split('T')[0]} to ${timeRange.end.split('T')[0]}</div>
+                        </div>
+                        <div>
+                            <div class="font-medium">Data Quality</div>
+                            <div class="opacity-75">${overallCoverage >= 90 ? 'Excellent' : overallCoverage >= 70 ? 'Good' : 'Limited'}</div>
+                        </div>
+                    </div>
+                    ${coverageDetails}
+                </div>
+            </div>
+        `;
+        
+        chatMessages.appendChild(coverageDiv);
+        this.scrollToBottom();
     }
 
     addTimezoneFootnote(timezone) {
